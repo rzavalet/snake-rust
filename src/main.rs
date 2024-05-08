@@ -22,6 +22,8 @@ const NORMAL_SPEED: Duration = Duration::from_millis(500);
 const FAST_SPEED:   Duration = Duration::from_millis(50);
 
 enum GameState {
+    /// A particular `Game` can be in any of these states. We can thing of they as different
+    /// screens in the game.
     STARTING,
     PLAYING,
     PAUSED,
@@ -29,6 +31,8 @@ enum GameState {
 }
 
 enum GameTransition {
+    /// In a given `GameState`, certain actions are possible. Those are denoted by these
+    /// `GameTransition`s.
     PLAY,
     PAUSE,
     LOOSE,
@@ -36,6 +40,8 @@ enum GameTransition {
 }
 
 struct GameArea {
+    /// The area through which the snake can move is composed of cells. The area has `hcells` width
+    /// and `vcells` height.
     hcells      : u32,
     vcells      : u32,
     game_area   : Rect,
@@ -43,6 +49,8 @@ struct GameArea {
 }
 
 enum Direction {
+    /// A `Snake` can move in any of these directions. Well, that actually depends on the current
+    /// direction. E.g. if the `Snake` is moving `LEFT`, it cannot change its direction to `RIGHT`.
     LEFT,
     RIGHT,
     UP,
@@ -56,11 +64,14 @@ struct Coordinate {
 }
 
 struct Snake {
+    /// A `Snake` is essentially a vector of cells in the grid, whose head is moving in certain
+    /// `direction`.
     direction   :   Direction,
     body        :   Vec<Coordinate>,
 }
 
 struct GameContext {
+    /// We use the GameContext to stash anything related to the underlying SDL structures.
     current_state   : GameState,
     canvas          : Canvas<Window>,
     event_pump      : EventPump,
@@ -96,6 +107,7 @@ impl GameContext {
 
 }
 
+/// Generates a `Rec`tangle whose units are in pixels.
 fn rec_generator(display: &GameArea, coord: &Coordinate) -> Option<Rect> {
 
     if coord.x > display.hcells {
@@ -114,6 +126,8 @@ fn rec_generator(display: &GameArea, coord: &Coordinate) -> Option<Rect> {
     return Some(r);
 }
 
+/// Create a `Snake` with a certain number of cells as its body. Let's always initialize its
+/// direction to `RIGHT` for now.
 fn create_snake(display: &GameArea) -> Snake {
     let mut snake = Snake {
         direction: Direction::RIGHT,
@@ -148,6 +162,7 @@ fn create_snake(display: &GameArea) -> Snake {
     return snake;
 }
 
+/// As explained earlier, GameArea is a grid of cells. Here we create such cells as rectangles.
 fn create_grid<'a>() -> &'a GameArea {
     let mut display = GameArea {
         vcells   : (HEIGHT - 2 * SPACING) / SPACING,
@@ -172,6 +187,8 @@ fn create_grid<'a>() -> &'a GameArea {
 
 struct Game<'a> {
     context     : GameContext,
+    // TODO: We need to figure out how to set the `lifetime`s of multiple structures. This one is
+    // only an example. There are many more.
     display     : &'a GameArea,
     speed       : Duration,
     score       : u32,
@@ -183,6 +200,11 @@ struct Game<'a> {
 }
 
 impl<'a> Game<'a> {
+    // TODO: Implement the appropriate screens for `STARTING` and `PAUSED` states.
+
+    /// Create a new `Game`. Once a game is created, a game can be `start`ed(). As part of creating
+    /// the `Game`, its `GameContext` is also initialized. Such initialization consists of setting
+    /// up everything related to SDL2.
     fn new() -> &'a Game<'a> {
         let mut rng = rand::thread_rng();
         let display = create_grid();
@@ -209,6 +231,13 @@ impl<'a> Game<'a> {
         return game;
     }
 
+    /// This is the loop for the `PLAYING` state. From this state we should be able to transition
+    /// to either:
+    ///     - PAUSED: If the user presses _some_ key.
+    ///     - GAMEOVER: If the `Snake` collides with itself or with the walls.
+    ///
+    /// Otherwise, the game continues _ad infinitum`.
+    /// 
     fn game_loop(&self) -> GameTransition {
 
         let mut rng = rand::thread_rng();
@@ -217,6 +246,8 @@ impl<'a> Game<'a> {
         let mut score_surface : sdl2::surface::Surface;
         let mut texture : sdl2::render::Texture;
 
+        // TODO: `font` should be another field in `GameContext`. No need to load the font in every
+        // `GameState`. Fixing this requires knowledge on `Lifetimes`, though.
         let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
         let mut font = ttf_context.load_font("/home/rzavalet/Repositories/snake-rust/res/Roboto-Regular.ttf",
                                              128).unwrap();
@@ -368,6 +399,10 @@ impl<'a> Game<'a> {
         return GameTransition::PLAY;
     }
 
+    /// This loop represents the `GAMEOVER` window that is shown when `GameState::PLAYING +
+    /// GameTransition::LOOSE` occurrs. 
+    ///
+    /// The idea is that it should show the option to `EXIT` or `PLAY` again.
     fn game_over(&self) -> GameTransition {
 
         let transition = GameTransition::PLAY;
@@ -376,6 +411,8 @@ impl<'a> Game<'a> {
         let mut score_surface : sdl2::surface::Surface;
         let mut texture : sdl2::render::Texture;
 
+        // TODO: `font` should be another field in `GameContext`. No need to load the font in every
+        // `GameState`. Fixing this requires knowledge on `Lifetimes`, though.
         let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
         let mut font = ttf_context.load_font("/home/rzavalet/Repositories/snake-rust/res/Roboto-Regular.ttf",
                                              128).unwrap();
@@ -429,6 +466,9 @@ impl<'a> Game<'a> {
     }
 
 
+    /// The `Game` is controlled by a `FSM`. This probably hasn't been fully thought through. Take
+    /// it as a temporary skelleton for now. E.g. we currently don't have a `STARTING` window.
+    /// TODO: Confirm that the FSM is complete.
     fn start(&mut self) {
         'game: loop {
             match self.context.current_state {
