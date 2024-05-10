@@ -18,7 +18,7 @@ const HEIGHT      : u32 = 600;
 const SPACING     : u32 = 20;
 const CELL_SPACE  : u32 = 20;
 
-const NORMAL_SPEED: Duration = Duration::from_millis(500);
+const NORMAL_SPEED: Duration = Duration::from_millis(300);
 const FAST_SPEED:   Duration = Duration::from_millis(50);
 
 enum GameState {
@@ -79,15 +79,16 @@ struct GameContext {
 
 impl GameContext {
     fn new() -> GameContext {
-        let mut rng = rand::thread_rng();
         let sdl_context = sdl2::init().unwrap();
         let video_subsystem = sdl_context.video().unwrap();
 
-        let window = video_subsystem.window("Simple Snake", WIDTH, HEIGHT)
+        let mut window = video_subsystem.window("Simple Snake", WIDTH, HEIGHT)
             .position_centered()
             .opengl()
             .build()
             .unwrap();
+
+        window.show();
 
         let mut canvas = window.into_canvas().build().unwrap();
 
@@ -95,8 +96,9 @@ impl GameContext {
 
         canvas.set_draw_color(Color::RGB(0, 255, 255));
         canvas.clear();
+        canvas.present();
 
-        let mut event_pump = sdl_context.event_pump().unwrap();
+        let event_pump = sdl_context.event_pump().unwrap();
 
        GameContext {
            current_state : GameState::STARTING,
@@ -163,7 +165,7 @@ fn create_snake(display: &GameArea) -> Snake {
 }
 
 /// As explained earlier, GameArea is a grid of cells. Here we create such cells as rectangles.
-fn create_grid<'a>() -> &'a GameArea {
+fn create_grid() -> GameArea {
     let mut display = GameArea {
         vcells   : (HEIGHT - 2 * SPACING) / SPACING,
         hcells   : (WIDTH  - 2 * SPACING) / SPACING,
@@ -181,15 +183,15 @@ fn create_grid<'a>() -> &'a GameArea {
         }
     }
 
-    return &display;
+    return display;
 }
 
 
-struct Game<'a> {
+struct Game {
     context     : GameContext,
     // TODO: We need to figure out how to set the `lifetime`s of multiple structures. This one is
     // only an example. There are many more.
-    display     : &'a GameArea,
+    display     : GameArea,
     speed       : Duration,
     score       : u32,
     snake       : Snake,
@@ -199,13 +201,13 @@ struct Game<'a> {
     game_over_rect: Rect,
 }
 
-impl<'a> Game<'a> {
+impl Game {
     // TODO: Implement the appropriate screens for `STARTING` and `PAUSED` states.
 
     /// Create a new `Game`. Once a game is created, a game can be `start`ed(). As part of creating
     /// the `Game`, its `GameContext` is also initialized. Such initialization consists of setting
     /// up everything related to SDL2.
-    fn new() -> &'a Game<'a> {
+    fn new() -> Game {
         let mut rng = rand::thread_rng();
         let display = create_grid();
         let snake = create_snake(&display);
@@ -214,16 +216,18 @@ impl<'a> Game<'a> {
         let score_rect = Rect::new(SPACING as i32, 0, 100, SPACING);
         let game_over_rect = Rect::new((WIDTH/2) as i32, (HEIGHT/2) as i32, 100, SPACING);
 
-        let game : &'a Game = & Game {
+        let food = Coordinate {
+            x : rng.gen_range(0..display.hcells), 
+            y : rng.gen_range(0..display.vcells),
+        };
+
+        let game = Game {
             context : ctxt,
             display : display,
             speed   : NORMAL_SPEED,
             score   : 0,
             snake   : snake,
-            food    : Coordinate{
-                                x : rng.gen_range(0..display.hcells), 
-                                y : rng.gen_range(0..display.vcells),
-                      },
+            food    : food,
             score_rect : score_rect,
             game_over_rect : game_over_rect,
         };
@@ -238,7 +242,7 @@ impl<'a> Game<'a> {
     ///
     /// Otherwise, the game continues _ad infinitum`.
     /// 
-    fn game_loop(&self) -> GameTransition {
+    fn game_loop(&mut self) -> GameTransition {
 
         let mut rng = rand::thread_rng();
 
@@ -249,8 +253,9 @@ impl<'a> Game<'a> {
         // TODO: `font` should be another field in `GameContext`. No need to load the font in every
         // `GameState`. Fixing this requires knowledge on `Lifetimes`, though.
         let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
-        let mut font = ttf_context.load_font("/home/rzavalet/Repositories/snake-rust/res/Roboto-Regular.ttf",
-                                             128).unwrap();
+        let mut font = ttf_context.load_font(
+            "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf",
+        128).unwrap();
         font.set_style(ttf::FontStyle::NORMAL);
 
 
@@ -403,9 +408,9 @@ impl<'a> Game<'a> {
     /// GameTransition::LOOSE` occurrs. 
     ///
     /// The idea is that it should show the option to `EXIT` or `PLAY` again.
-    fn game_over(&self) -> GameTransition {
+    fn game_over(&mut self) -> GameTransition {
 
-        let transition = GameTransition::PLAY;
+        //let transition = GameTransition::PLAY;
 
         let texture_creator = self.context.canvas.texture_creator();
         let mut score_surface : sdl2::surface::Surface;
@@ -435,11 +440,11 @@ impl<'a> Game<'a> {
                 match event {
                     Event::Quit {..} |
                     Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
-                        transition = GameTransition::EXIT;
+                        //transition = GameTransition::EXIT;
                         break 'gameover
                     },
                     Event::KeyDown { keycode: Some(Keycode::Return), ..} => {
-                        transition = GameTransition::EXIT;
+                        //transition = GameTransition::EXIT;
                         break 'gameover
                     },
 
@@ -462,7 +467,8 @@ impl<'a> Game<'a> {
             ::std::thread::sleep(self.speed);
         }
 
-        return transition;
+        //return transition;
+        return GameTransition::EXIT;
     }
 
 
