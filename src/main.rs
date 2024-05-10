@@ -88,15 +88,10 @@ impl GameContext {
             .build()
             .unwrap();
 
-        window.show();
-
         let mut canvas = window.into_canvas().build().unwrap();
-
-
 
         canvas.set_draw_color(Color::RGB(0, 255, 255));
         canvas.clear();
-        canvas.present();
 
         let event_pump = sdl_context.event_pump().unwrap();
 
