@@ -89,7 +89,7 @@ impl GameContext {
         let sdl_context = sdl2::init().unwrap();
         let video_subsystem = sdl_context.video().unwrap();
 
-        let mut window = video_subsystem.window("Simple Snake", WIDTH, HEIGHT)
+        let window = video_subsystem.window("Simple Snake", WIDTH, HEIGHT)
             .position_centered()
             .opengl()
             .build()
@@ -200,7 +200,6 @@ struct Game {
     food        : Coordinate,
 
     score_rect  : Rect,
-    game_over_rect: Rect,
 }
 
 impl Game {
@@ -216,7 +215,6 @@ impl Game {
         let ctxt = GameContext::new();
 
         let score_rect = Rect::new(SPACING as i32, 0, 100, SPACING);
-        let game_over_rect = Rect::new((WIDTH/2) as i32, (HEIGHT/2) as i32, 100, SPACING);
 
         let food = Coordinate {
             x : rng.gen_range(0..display.hcells), 
@@ -231,7 +229,6 @@ impl Game {
             snake   : snake,
             food    : food,
             score_rect : score_rect,
-            game_over_rect : game_over_rect,
         };
 
         return game;
@@ -248,11 +245,11 @@ impl Game {
         let new_game_message = options[1 - *current_option as usize];
         let (fw1, fh1) = font.size_of(new_game_message).unwrap();
 
-        let mut new_game_surface  = font
+        let new_game_surface  = font
             .render(new_game_message)
             .solid(Color::RGB(0, 0, 0))
             .unwrap();
-        let mut new_game_texture = texture_creator
+        let new_game_texture = texture_creator
             .create_texture_from_surface(&new_game_surface)
             .unwrap();
         let new_game_rect = Rect::new(WIDTH as i32/2 - fw1 as i32/2, HEIGHT as i32/2 - fh1 as i32/2, fw1, fh1);
@@ -262,11 +259,11 @@ impl Game {
 
         let exit_message = options[2 + *current_option as usize];
         let (fw2, fh2) = font.size_of(exit_message).unwrap();
-        let mut exit_surface  = font
+        let exit_surface  = font
             .render(exit_message)
             .solid(Color::RGB(0, 0, 0))
             .unwrap();
-        let mut exit_texture = texture_creator
+        let exit_texture = texture_creator
             .create_texture_from_surface(&exit_surface)
             .unwrap();
         let exit_rect = Rect::new(WIDTH as i32/2 - fw1 as i32/2, 2 * SPACING as i32 + HEIGHT as i32/2 - fh2 as i32/2, fw2, fh2);
@@ -277,8 +274,6 @@ impl Game {
     }
 
     fn game_starting(&mut self) -> GameTransition {
-
-        let mut rng = rand::thread_rng();
 
         let mut result : GameTransition = GameTransition::EXIT;
 
@@ -342,7 +337,7 @@ impl Game {
     /// 
     fn game_loop(&mut self) -> GameTransition {
 
-        let mut result = GameTransition::LOOSE;
+        let result : GameTransition;
         let mut rng = rand::thread_rng();
 
         let texture_creator = self.context.canvas.texture_creator();
@@ -504,75 +499,8 @@ impl Game {
 
     /// This loop represents the `GAMEOVER` window that is shown when `GameState::PLAYING +
     /// GameTransition::LOOSE` occurrs. 
-    ///
-    /// The idea is that it should show the option to `EXIT` or `PLAY` again.
-    fn game_over(&mut self) -> GameTransition {
-
-        //let transition = GameTransition::PLAY;
-
-        let texture_creator = self.context.canvas.texture_creator();
-        let mut score_surface : sdl2::surface::Surface;
-        let mut texture : sdl2::render::Texture;
-
-        // TODO: `font` should be another field in `GameContext`. No need to load the font in every
-        // `GameState`. Fixing this requires knowledge on `Lifetimes`, though.
-        let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
-        let mut font = ttf_context.load_font(FONT_FILE, 24).expect("ERROR: Could not load font");
-        font.set_style(ttf::FontStyle::NORMAL);
-
-
-        'gameover: loop {
-            self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
-            self.context.canvas.clear();
-
-            self.context.canvas.set_draw_color(Color::RGB(255, 0, 0));
-            self.context.canvas.draw_rect(self.display.game_area).unwrap();
-
-            self.context.canvas.set_draw_color(Color::RGB(0, 0, 0));
-            for r in &self.display.grid {
-                self.context.canvas.draw_rect(*r).unwrap();
-            }
-
-            for event in self.context.event_pump.poll_iter() {
-                match event {
-                    Event::Quit {..} |
-                    Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
-                        //transition = GameTransition::EXIT;
-                        break 'gameover
-                    },
-                    Event::KeyDown { keycode: Some(Keycode::Return), ..} => {
-                        //transition = GameTransition::EXIT;
-                        break 'gameover
-                    },
-
-                    _ => {}
-                }
-            }
-
-            score_surface  = font
-                .render("Game Over")
-                .solid(Color::RGB(255, 0, 0))
-                .unwrap();
-            texture = texture_creator
-                .create_texture_from_surface(&score_surface)
-                .unwrap();
-            self.context.canvas.copy(&texture, None, Some(self.game_over_rect))
-                .map_err(|e| e.to_string())
-                .unwrap();
-
-            self.context.canvas.present();
-            ::std::thread::sleep(self.speed);
-        }
-
-        //return transition;
-        return GameTransition::EXIT;
-    }
-
-
     fn game_over_loop(&mut self) -> GameTransition {
-        let mut rng = rand::thread_rng();
-
-        let mut result : GameTransition = GameTransition::EXIT;
+        let result : GameTransition;
 
         let texture_creator = self.context.canvas.texture_creator();
 
@@ -581,8 +509,6 @@ impl Game {
         let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
         let mut font = ttf_context.load_font(FONT_FILE, 24).expect("ERROR: Could not load font");
         font.set_style(ttf::FontStyle::BOLD);
-
-        let mut current_option : u32 = 0;
 
         'running: loop {
             self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
@@ -611,11 +537,11 @@ impl Game {
             let new_game_message = "You lost! Press any key to continue...";
             let (fw1, fh1) = font.size_of(new_game_message).unwrap();
 
-            let mut new_game_surface  = font
+            let new_game_surface  = font
                 .render(new_game_message)
                 .solid(Color::RGB(0, 0, 0))
                 .unwrap();
-            let mut new_game_texture = texture_creator
+            let new_game_texture = texture_creator
                 .create_texture_from_surface(&new_game_surface)
                 .unwrap();
             let new_game_rect = Rect::new(WIDTH as i32/2 - fw1 as i32/2, HEIGHT as i32/2 - fh1 as i32/2, fw1, fh1);
