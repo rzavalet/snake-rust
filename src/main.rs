@@ -4,6 +4,7 @@ use sdl2::pixels::Color;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::rect::Rect;
+use sdl2::render;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 use sdl2::EventPump;
@@ -21,6 +22,10 @@ const CELL_SPACE  : u32 = 20;
 const NORMAL_SPEED: Duration = Duration::from_millis(300);
 const FAST_SPEED:   Duration = Duration::from_millis(50);
 
+const FONT_FILE : &str = "./res/Roboto-Regular.ttf";
+//const FONT_FILE = "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf";
+
+#[derive(Debug)]
 enum GameState {
     /// A particular `Game` can be in any of these states. We can thing of they as different
     /// screens in the game.
@@ -30,6 +35,8 @@ enum GameState {
     GAMEOVER,
 }
 
+
+#[derive(Debug)]
 enum GameTransition {
     /// In a given `GameState`, certain actions are possible. Those are denoted by these
     /// `GameTransition`s.
@@ -230,6 +237,102 @@ impl Game {
         return game;
     }
 
+    fn render_menu(&mut self, font: &ttf::Font, texture_creator: &render::TextureCreator<sdl2::video::WindowContext>, current_option: &mut u32) {
+        let options : Vec<&str> = vec![
+            "  New Game",
+            "> New Game",
+            "  Exit",
+            "> Exit",
+        ];
+
+        let new_game_message = options[1 - *current_option as usize];
+        let (fw1, fh1) = font.size_of(new_game_message).unwrap();
+
+        let mut new_game_surface  = font
+            .render(new_game_message)
+            .solid(Color::RGB(0, 0, 0))
+            .unwrap();
+        let mut new_game_texture = texture_creator
+            .create_texture_from_surface(&new_game_surface)
+            .unwrap();
+        let new_game_rect = Rect::new(WIDTH as i32/2 - fw1 as i32/2, HEIGHT as i32/2 - fh1 as i32/2, fw1, fh1);
+        self.context.canvas.copy(&new_game_texture, None, Some(new_game_rect))
+            .map_err(|e| e.to_string())
+            .unwrap();
+
+        let exit_message = options[2 + *current_option as usize];
+        let (fw2, fh2) = font.size_of(exit_message).unwrap();
+        let mut exit_surface  = font
+            .render(exit_message)
+            .solid(Color::RGB(0, 0, 0))
+            .unwrap();
+        let mut exit_texture = texture_creator
+            .create_texture_from_surface(&exit_surface)
+            .unwrap();
+        let exit_rect = Rect::new(WIDTH as i32/2 - fw1 as i32/2, 2 * SPACING as i32 + HEIGHT as i32/2 - fh2 as i32/2, fw2, fh2);
+        self.context.canvas.copy(&exit_texture, None, Some(exit_rect))
+            .map_err(|e| e.to_string())
+            .unwrap();
+
+    }
+
+    fn game_starting(&mut self) -> GameTransition {
+
+        let mut rng = rand::thread_rng();
+
+        let mut result : GameTransition = GameTransition::EXIT;
+
+        let texture_creator = self.context.canvas.texture_creator();
+
+        // TODO: `font` should be another field in `GameContext`. No need to load the font in every
+        // `GameState`. Fixing this requires knowledge on `Lifetimes`, though.
+        let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
+        let mut font = ttf_context.load_font(FONT_FILE, 24).expect("ERROR: Could not load font");
+        font.set_style(ttf::FontStyle::BOLD);
+
+        let mut current_option : u32 = 0;
+
+        'running: loop {
+            self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
+            self.context.canvas.clear();
+
+            self.context.canvas.set_draw_color(Color::RGB(255, 0, 0));
+            self.context.canvas.draw_rect(self.display.game_area).unwrap();
+
+            for event in self.context.event_pump.poll_iter() {
+                match event {
+                    Event::Quit {..} |
+                    Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
+                        break 'running
+                    },
+                    Event::KeyDown { keycode: Some(Keycode::Up), ..} |
+                    Event::KeyDown { keycode: Some(Keycode::Down), ..} => {
+                        current_option = 1 - current_option;
+                    },
+                    Event::KeyDown { keycode: Some(Keycode::Return), ..} => {
+                        if current_option == 1 {
+                            result = GameTransition::EXIT;
+                            break 'running;
+                        }
+                        else {
+                            result = GameTransition::PLAY;
+                            break 'running;
+                        }
+                    },
+
+                    _ => {}
+                }
+            }
+
+            self.render_menu(&font, &texture_creator, &mut current_option);
+            self.context.canvas.present();
+            ::std::thread::sleep(self.speed);
+
+        }
+
+        return result;
+    }
+
     /// This is the loop for the `PLAYING` state. From this state we should be able to transition
     /// to either:
     ///     - PAUSED: If the user presses _some_ key.
@@ -239,6 +342,7 @@ impl Game {
     /// 
     fn game_loop(&mut self) -> GameTransition {
 
+        let mut result = GameTransition::LOOSE;
         let mut rng = rand::thread_rng();
 
         let texture_creator = self.context.canvas.texture_creator();
@@ -248,9 +352,7 @@ impl Game {
         // TODO: `font` should be another field in `GameContext`. No need to load the font in every
         // `GameState`. Fixing this requires knowledge on `Lifetimes`, though.
         let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
-        let mut font = ttf_context.load_font(
-            "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf",
-        128).unwrap();
+        let mut font = ttf_context.load_font(FONT_FILE, 24).expect("ERROR: Could not load font");
         font.set_style(ttf::FontStyle::NORMAL);
 
 
@@ -270,6 +372,7 @@ impl Game {
                 match event {
                     Event::Quit {..} |
                     Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
+                        result = GameTransition::LOOSE;
                         break 'running
                     },
                     Event::KeyDown { keycode: Some(Keycode::Left), ..} => {
@@ -313,7 +416,7 @@ impl Game {
             match self.snake.direction {
                 Direction::LEFT  {..} => { 
                     if new_head.x == 0 {
-                        println!("Game over!");
+                        result = GameTransition::LOOSE;
                         break 'running;
                     }
 
@@ -321,7 +424,7 @@ impl Game {
                 },
                 Direction::RIGHT {..} => { 
                     if new_head.x == self.display.hcells - 1 {
-                        println!("Game over!");
+                        result = GameTransition::LOOSE;
                         break 'running;
                     }
 
@@ -329,7 +432,7 @@ impl Game {
                 },
                 Direction::UP    {..} => { 
                     if new_head.y == 0 {
-                        println!("Game over!");
+                        result = GameTransition::LOOSE;
                         break 'running;
                     }
 
@@ -337,7 +440,7 @@ impl Game {
                 },
                 Direction::DOWN  {..} => { 
                     if new_head.y == self.display.vcells - 1 {
-                        println!("Game over!");
+                        result = GameTransition::LOOSE;
                         break 'running;
                     }
 
@@ -349,7 +452,7 @@ impl Game {
                 self.food.x = rng.gen_range(0..self.display.hcells);
                 self.food.y = rng.gen_range(0..self.display.vcells);
                 self.score += 1;
-                println!("New score: {0}", self.score);
+                //println!("New score: {0}", self.score);
             }
             else {
                 self.snake.body.pop().unwrap();
@@ -357,14 +460,14 @@ impl Game {
 
             self.snake.body.insert(0,new_head);
 
-            for b in &self.snake.body[1..] {
-                println!("Body {0} {1}", b.x, b.y);
-            }
-            println!("New Head {0} {1}", new_head.x, new_head.y);
+            //for b in &self.snake.body[1..] {
+            //    println!("Body {0} {1}", b.x, b.y);
+            //}
+            //println!("New Head {0} {1}", new_head.x, new_head.y);
 
             for b in &self.snake.body[1..] {
                 if new_head.x == b.x && new_head.y == b.y {
-                    println!("Game over!");
+                    result = GameTransition::LOOSE;
                     break 'running;
                 }
             }
@@ -396,7 +499,7 @@ impl Game {
             ::std::thread::sleep(self.speed);
         }
 
-        return GameTransition::PLAY;
+        return result;
     }
 
     /// This loop represents the `GAMEOVER` window that is shown when `GameState::PLAYING +
@@ -414,8 +517,7 @@ impl Game {
         // TODO: `font` should be another field in `GameContext`. No need to load the font in every
         // `GameState`. Fixing this requires knowledge on `Lifetimes`, though.
         let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
-        let mut font = ttf_context.load_font("/home/rzavalet/Repositories/snake-rust/res/Roboto-Regular.ttf",
-                                             128).unwrap();
+        let mut font = ttf_context.load_font(FONT_FILE, 24).expect("ERROR: Could not load font");
         font.set_style(ttf::FontStyle::NORMAL);
 
 
@@ -467,6 +569,68 @@ impl Game {
     }
 
 
+    fn game_over_loop(&mut self) -> GameTransition {
+        let mut rng = rand::thread_rng();
+
+        let mut result : GameTransition = GameTransition::EXIT;
+
+        let texture_creator = self.context.canvas.texture_creator();
+
+        // TODO: `font` should be another field in `GameContext`. No need to load the font in every
+        // `GameState`. Fixing this requires knowledge on `Lifetimes`, though.
+        let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
+        let mut font = ttf_context.load_font(FONT_FILE, 24).expect("ERROR: Could not load font");
+        font.set_style(ttf::FontStyle::BOLD);
+
+        let mut current_option : u32 = 0;
+
+        'running: loop {
+            self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
+            self.context.canvas.clear();
+
+            self.context.canvas.set_draw_color(Color::RGB(255, 0, 0));
+            self.context.canvas.draw_rect(self.display.game_area).unwrap();
+
+            for event in self.context.event_pump.poll_iter() {
+                match event {
+                    Event::Quit {..} |
+                    Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
+                        result = GameTransition::EXIT;
+                        break 'running
+                    },
+                    Event::KeyDown {..}  => {
+                        result = GameTransition::PLAY;
+                        break 'running;
+                    },
+
+                    _ => {}
+                }
+            }
+
+
+            let new_game_message = "You lost! Press any key to continue...";
+            let (fw1, fh1) = font.size_of(new_game_message).unwrap();
+
+            let mut new_game_surface  = font
+                .render(new_game_message)
+                .solid(Color::RGB(0, 0, 0))
+                .unwrap();
+            let mut new_game_texture = texture_creator
+                .create_texture_from_surface(&new_game_surface)
+                .unwrap();
+            let new_game_rect = Rect::new(WIDTH as i32/2 - fw1 as i32/2, HEIGHT as i32/2 - fh1 as i32/2, fw1, fh1);
+            self.context.canvas.copy(&new_game_texture, None, Some(new_game_rect))
+                .map_err(|e| e.to_string())
+                .unwrap();
+
+            self.context.canvas.present();
+            ::std::thread::sleep(self.speed);
+
+        }
+
+        return result;
+    }
+
     /// The `Game` is controlled by a `FSM`. This probably hasn't been fully thought through. Take
     /// it as a temporary skelleton for now. E.g. we currently don't have a `STARTING` window.
     /// TODO: Confirm that the FSM is complete.
@@ -474,7 +638,7 @@ impl Game {
         'game: loop {
             match self.context.current_state {
                 GameState::STARTING {..} => {
-                    let transition = self.game_loop();
+                    let transition = self.game_starting();
                     match transition {
                         GameTransition::PLAY {..} => {
                             self.context.current_state = GameState::PLAYING;
@@ -485,22 +649,24 @@ impl Game {
                         },
 
                         _ => {
+                            panic!("Invalid transition {:?} in state {:?}", transition, self.context.current_state);
                         }
                     }
                 },
 
                 GameState::PLAYING {..} => {
-                    let transition = GameTransition::LOOSE;
+                    let transition = self.game_loop();
                     match transition {
                         GameTransition::PAUSE {..} => {
                             self.context.current_state = GameState::PAUSED;
                         },
 
                         GameTransition::LOOSE {..} => {
-                            break 'game
+                            self.context.current_state = GameState::GAMEOVER;
                         },
 
                         _ => {
+                            panic!("Invalid transition {:?} in state {:?}", transition, self.context.current_state);
                         }
                     }
 
@@ -518,15 +684,16 @@ impl Game {
                         },
 
                         _ => {
+                            panic!("Invalid transition {:?} in state {:?}", transition, self.context.current_state);
                         }
                     }
                 },
 
                 GameState::GAMEOVER {..} => {
-                    let transition = GameTransition::PLAY;
+                    let transition = self.game_over_loop();
                     match transition {
                         GameTransition::PLAY {..} => {
-                            self.context.current_state = GameState::PLAYING;
+                            self.context.current_state = GameState::STARTING;
                         },
 
                         GameTransition::EXIT {..} => {
@@ -534,6 +701,7 @@ impl Game {
                         },
 
                         _ => {
+                            panic!("Invalid transition {:?} in state {:?}", transition, self.context.current_state);
                         }
                     }
                 },
