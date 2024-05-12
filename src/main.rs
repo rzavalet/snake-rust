@@ -25,10 +25,11 @@ const FAST_SPEED:   Duration = Duration::from_millis(50);
 const FONT_FILE : &str = "./res/Roboto-Regular.ttf";
 //const FONT_FILE = "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf";
 
+
+/// A particular `Game` can be in any of these states. We can think of they as different
+/// screens in the game.
 #[derive(Debug)]
 enum GameState {
-    /// A particular `Game` can be in any of these states. We can thing of they as different
-    /// screens in the game.
     STARTING,
     PLAYING,
     PAUSED,
@@ -36,55 +37,65 @@ enum GameState {
 }
 
 
+/// In a given `GameState`, certain actions are possible. Those are denoted by these
+/// `GameTransition`s.
 #[derive(Debug)]
 enum GameTransition {
-    /// In a given `GameState`, certain actions are possible. Those are denoted by these
-    /// `GameTransition`s.
     PLAY,
     PAUSE,
-    LOOSE,
+    LOSE,
     EXIT,
 }
 
+
+/// The area through which the snake can move is composed of cells. The area has `hcells` width
+/// and `vcells` height.
 struct GameArea {
-    /// The area through which the snake can move is composed of cells. The area has `hcells` width
-    /// and `vcells` height.
     hcells      : u32,
     vcells      : u32,
     game_area   : Rect,
+    /// SDL `Rect`angles conforming the game grid:
     grid        : Vec<Rect>,
 }
 
+
+/// A `Snake` can move in any of these directions. Well, that actually depends on the current
+/// direction. E.g. if the `Snake` is moving `LEFT`, it cannot change its direction to `RIGHT`.
 enum Direction {
-    /// A `Snake` can move in any of these directions. Well, that actually depends on the current
-    /// direction. E.g. if the `Snake` is moving `LEFT`, it cannot change its direction to `RIGHT`.
     LEFT,
     RIGHT,
     UP,
     DOWN,
 }
 
+
+/// The coordinates of a cell in the game display.
 #[derive(Debug, Clone, Copy)]
 struct Coordinate {
     x           : u32,
     y           : u32
 }
 
+
+/// A `Snake` is essentially a vector of cells in the grid, whose head is moving in certain
+/// `direction`.
 struct Snake {
-    /// A `Snake` is essentially a vector of cells in the grid, whose head is moving in certain
-    /// `direction`.
     direction   :   Direction,
     body        :   Vec<Coordinate>,
 }
 
+
+/// We use the GameContext to stash anything related to the underlying SDL structures.
 struct GameContext {
-    /// We use the GameContext to stash anything related to the underlying SDL structures.
     current_state   : GameState,
     canvas          : Canvas<Window>,
     event_pump      : EventPump,
 }
 
+
 impl GameContext {
+
+    /// Constructor
     fn new() -> GameContext {
         let sdl_context = sdl2::init().unwrap();
         let video_subsystem = sdl_context.video().unwrap();
@@ -102,17 +113,18 @@ impl GameContext {
 
         let event_pump = sdl_context.event_pump().unwrap();
 
-       GameContext {
-           current_state : GameState::STARTING,
-           canvas        : canvas,
-           event_pump    : event_pump,
-       }
+        GameContext {
+            current_state : GameState::STARTING,
+            canvas        : canvas,
+            event_pump    : event_pump,
+        }
     }
-
 }
 
-/// Generates a `Rec`tangle whose units are in pixels.
-fn rec_generator(display: &GameArea, coord: &Coordinate) -> Option<Rect> {
+
+/// Generates the SDL `Rect`angle corresponding to the given game `coord`inate.
+/// The `Rect` must fit inside `GameArea`; otherwise `None` is returned.
+fn create_rect(display: &GameArea, coord: &Coordinate) -> Option<Rect> {
 
     if coord.x > display.hcells {
         return None;
@@ -129,6 +141,7 @@ fn rec_generator(display: &GameArea, coord: &Coordinate) -> Option<Rect> {
 
     return Some(r);
 }
+
 
 /// Create a `Snake` with a certain number of cells as its body. Let's always initialize its
 /// direction to `RIGHT` for now.
@@ -166,6 +179,7 @@ fn create_snake(display: &GameArea) -> Snake {
     return snake;
 }
 
+
 /// As explained earlier, GameArea is a grid of cells. Here we create such cells as rectangles.
 fn create_grid() -> GameArea {
     let mut display = GameArea {
@@ -180,7 +194,7 @@ fn create_grid() -> GameArea {
 
     for vcell in 0..display.vcells {
         for hcell in 0..display.hcells {
-            let r = rec_generator(&display, &Coordinate { x: hcell, y: vcell }).unwrap();
+            let r = create_rect(&display, &Coordinate { x: hcell, y: vcell }).unwrap();
             display.grid.push(r);
         }
     }
@@ -189,7 +203,8 @@ fn create_grid() -> GameArea {
 }
 
 
-struct Game {
+/// The actual state of the game.
+struct Game<'ttf> {
     context     : GameContext,
     // TODO: We need to figure out how to set the `lifetime`s of multiple structures. This one is
     // only an example. There are many more.
@@ -200,15 +215,17 @@ struct Game {
     food        : Coordinate,
 
     score_rect  : Rect,
+    font        : ttf::Font<'ttf, 'ttf>,
 }
 
-impl Game {
+
+impl<'ttf> Game<'ttf> {
     // TODO: Implement the appropriate screens for `STARTING` and `PAUSED` states.
 
     /// Create a new `Game`. Once a game is created, a game can be `start`ed(). As part of creating
     /// the `Game`, its `GameContext` is also initialized. Such initialization consists of setting
     /// up everything related to SDL2.
-    fn new() -> Game {
+    fn new(ttf_context: &'ttf ttf::Sdl2TtfContext) -> Game<'ttf> {
         let mut rng = rand::thread_rng();
         let display = create_grid();
         let snake = create_snake(&display);
@@ -221,6 +238,9 @@ impl Game {
             y : rng.gen_range(0..display.vcells),
         };
 
+        let mut font = ttf_context.load_font(FONT_FILE, 24).expect("ERROR: Could not load font");
+        font.set_style(ttf::FontStyle::BOLD);
+
         let game = Game {
             context : ctxt,
             display : display,
@@ -229,12 +249,13 @@ impl Game {
             snake   : snake,
             food    : food,
             score_rect : score_rect,
+            font    : font,
         };
 
         return game;
     }
 
-    fn render_menu(&mut self, font: &ttf::Font, texture_creator: &render::TextureCreator<sdl2::video::WindowContext>, current_option: &mut u32) {
+    fn render_menu(&mut self, texture_creator: &render::TextureCreator<sdl2::video::WindowContext>, current_option: &mut u32) {
         let options : Vec<&str> = vec![
             "  New Game",
             "> New Game",
@@ -243,9 +264,9 @@ impl Game {
         ];
 
         let new_game_message = options[1 - *current_option as usize];
-        let (fw1, fh1) = font.size_of(new_game_message).unwrap();
+        let (fw1, fh1) = self.font.size_of(new_game_message).unwrap();
 
-        let new_game_surface  = font
+        let new_game_surface  = self.font
             .render(new_game_message)
             .solid(Color::RGB(0, 0, 0))
             .unwrap();
@@ -258,8 +279,8 @@ impl Game {
             .unwrap();
 
         let exit_message = options[2 + *current_option as usize];
-        let (fw2, fh2) = font.size_of(exit_message).unwrap();
-        let exit_surface  = font
+        let (fw2, fh2) = self.font.size_of(exit_message).unwrap();
+        let exit_surface  = self.font
             .render(exit_message)
             .solid(Color::RGB(0, 0, 0))
             .unwrap();
@@ -278,12 +299,6 @@ impl Game {
         let mut result : GameTransition = GameTransition::EXIT;
 
         let texture_creator = self.context.canvas.texture_creator();
-
-        // TODO: `font` should be another field in `GameContext`. No need to load the font in every
-        // `GameState`. Fixing this requires knowledge on `Lifetimes`, though.
-        let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
-        let mut font = ttf_context.load_font(FONT_FILE, 24).expect("ERROR: Could not load font");
-        font.set_style(ttf::FontStyle::BOLD);
 
         let mut current_option : u32 = 0;
 
@@ -319,7 +334,7 @@ impl Game {
                 }
             }
 
-            self.render_menu(&font, &texture_creator, &mut current_option);
+            self.render_menu(&texture_creator, &mut current_option);
             self.context.canvas.present();
             ::std::thread::sleep(self.speed);
 
@@ -344,13 +359,6 @@ impl Game {
         let mut score_surface : sdl2::surface::Surface;
         let mut texture : sdl2::render::Texture;
 
-        // TODO: `font` should be another field in `GameContext`. No need to load the font in every
-        // `GameState`. Fixing this requires knowledge on `Lifetimes`, though.
-        let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
-        let mut font = ttf_context.load_font(FONT_FILE, 24).expect("ERROR: Could not load font");
-        font.set_style(ttf::FontStyle::NORMAL);
-
-
         'running: loop {
             self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
             self.context.canvas.clear();
@@ -367,7 +375,7 @@ impl Game {
                 match event {
                     Event::Quit {..} |
                     Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
-                        result = GameTransition::LOOSE;
+                        result = GameTransition::LOSE;
                         break 'running
                     },
                     Event::KeyDown { keycode: Some(Keycode::Left), ..} => {
@@ -411,7 +419,7 @@ impl Game {
             match self.snake.direction {
                 Direction::LEFT  {..} => { 
                     if new_head.x == 0 {
-                        result = GameTransition::LOOSE;
+                        result = GameTransition::LOSE;
                         break 'running;
                     }
 
@@ -419,7 +427,7 @@ impl Game {
                 },
                 Direction::RIGHT {..} => { 
                     if new_head.x == self.display.hcells - 1 {
-                        result = GameTransition::LOOSE;
+                        result = GameTransition::LOSE;
                         break 'running;
                     }
 
@@ -427,7 +435,7 @@ impl Game {
                 },
                 Direction::UP    {..} => { 
                     if new_head.y == 0 {
-                        result = GameTransition::LOOSE;
+                        result = GameTransition::LOSE;
                         break 'running;
                     }
 
@@ -435,7 +443,7 @@ impl Game {
                 },
                 Direction::DOWN  {..} => { 
                     if new_head.y == self.display.vcells - 1 {
-                        result = GameTransition::LOOSE;
+                        result = GameTransition::LOSE;
                         break 'running;
                     }
 
@@ -462,24 +470,24 @@ impl Game {
 
             for b in &self.snake.body[1..] {
                 if new_head.x == b.x && new_head.y == b.y {
-                    result = GameTransition::LOOSE;
+                    result = GameTransition::LOSE;
                     break 'running;
                 }
             }
 
 
             self.context.canvas.set_draw_color(Color::RGB(0,255,0));
-            self.context.canvas.fill_rect(rec_generator(&self.display, &self.snake.body[0])).unwrap();
+            self.context.canvas.fill_rect(create_rect(&self.display, &self.snake.body[0])).unwrap();
             self.context.canvas.set_draw_color(Color::RGB(0,0,255));
             for b in &self.snake.body[1..] {
-                self.context.canvas.fill_rect(rec_generator(&self.display, b)).unwrap();
+                self.context.canvas.fill_rect(create_rect(&self.display, b)).unwrap();
             }
 
             self.context.canvas.set_draw_color(Color::RGB(0,0,0));
-            self.context.canvas.fill_rect(rec_generator(&self.display, &self.food)).unwrap();
+            self.context.canvas.fill_rect(create_rect(&self.display, &self.food)).unwrap();
 
             let score_message = &format!("Score: {}", self.score);
-            score_surface  = font
+            score_surface  = self.font
                 .render(score_message)
                 .solid(Color::RGB(0, 0, 0))
                 .unwrap();
@@ -498,17 +506,11 @@ impl Game {
     }
 
     /// This loop represents the `GAMEOVER` window that is shown when `GameState::PLAYING +
-    /// GameTransition::LOOSE` occurrs. 
+    /// GameTransition::LOSE` occurrs. 
     fn game_over_loop(&mut self) -> GameTransition {
         let result : GameTransition;
 
         let texture_creator = self.context.canvas.texture_creator();
-
-        // TODO: `font` should be another field in `GameContext`. No need to load the font in every
-        // `GameState`. Fixing this requires knowledge on `Lifetimes`, though.
-        let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
-        let mut font = ttf_context.load_font(FONT_FILE, 24).expect("ERROR: Could not load font");
-        font.set_style(ttf::FontStyle::BOLD);
 
         'running: loop {
             self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
@@ -535,9 +537,9 @@ impl Game {
 
 
             let new_game_message = "You lost! Press any key to continue...";
-            let (fw1, fh1) = font.size_of(new_game_message).unwrap();
+            let (fw1, fh1) = self.font.size_of(new_game_message).unwrap();
 
-            let new_game_surface  = font
+            let new_game_surface  = self.font
                 .render(new_game_message)
                 .solid(Color::RGB(0, 0, 0))
                 .unwrap();
@@ -587,7 +589,7 @@ impl Game {
                             self.context.current_state = GameState::PAUSED;
                         },
 
-                        GameTransition::LOOSE {..} => {
+                        GameTransition::LOSE {..} => {
                             self.context.current_state = GameState::GAMEOVER;
                         },
 
@@ -640,6 +642,7 @@ impl Game {
 
 fn main() {
 
-    let mut game = Game::new();
+    let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
+    let mut game = Game::new(&ttf_context);
     game.start();
 }
