@@ -26,6 +26,14 @@ const FONT_FILE : &str = "./res/Roboto-Regular.ttf";
 //const FONT_FILE = "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf";
 
 
+/// Entry point
+fn main() {
+    let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
+    let mut game = Game::new(&ttf_context);
+    game.start();
+}
+
+
 /// A particular `Game` can be in any of these states. We can think of they as different
 /// screens in the game.
 #[derive(Debug)]
@@ -39,7 +47,7 @@ enum GameState {
 
 /// In a given `GameState`, certain actions are possible. Those are denoted by these
 /// `GameTransition`s.
-#[derive(Debug)]
+#[derive(PartialEq, Debug)]
 enum GameTransition {
     PLAY,
     PAUSE,
@@ -61,6 +69,7 @@ struct GameArea {
 
 /// A `Snake` can move in any of these directions. Well, that actually depends on the current
 /// direction. E.g. if the `Snake` is moving `LEFT`, it cannot change its direction to `RIGHT`.
+#[derive(PartialEq)]
 enum Direction {
     LEFT,
     RIGHT,
@@ -227,6 +236,10 @@ impl<'ttf> Game<'ttf> {
     /// up everything related to SDL2.
     fn new(ttf_context: &'ttf ttf::Sdl2TtfContext) -> Game<'ttf> {
         let mut rng = rand::thread_rng();
+
+        let mut font = ttf_context.load_font(FONT_FILE, 24).expect("ERROR: Could not load font");
+        font.set_style(ttf::FontStyle::BOLD);
+
         let display = create_grid();
         let snake = create_snake(&display);
         let ctxt = GameContext::new();
@@ -237,9 +250,6 @@ impl<'ttf> Game<'ttf> {
             x : rng.gen_range(0..display.hcells), 
             y : rng.gen_range(0..display.vcells),
         };
-
-        let mut font = ttf_context.load_font(FONT_FILE, 24).expect("ERROR: Could not load font");
-        font.set_style(ttf::FontStyle::BOLD);
 
         let game = Game {
             context : ctxt,
@@ -255,7 +265,7 @@ impl<'ttf> Game<'ttf> {
         return game;
     }
 
-    fn render_menu(&mut self, texture_creator: &render::TextureCreator<sdl2::video::WindowContext>, current_option: &mut u32) {
+    fn render_menu(&mut self, texture_creator: &render::TextureCreator<sdl2::video::WindowContext>, current_option: u32) {
         let options : Vec<&str> = vec![
             "  New Game",
             "> New Game",
@@ -263,7 +273,7 @@ impl<'ttf> Game<'ttf> {
             "> Exit",
         ];
 
-        let new_game_message = options[1 - *current_option as usize];
+        let new_game_message = options[1 - current_option as usize];
         let (fw1, fh1) = self.font.size_of(new_game_message).unwrap();
 
         let new_game_surface  = self.font
@@ -278,7 +288,7 @@ impl<'ttf> Game<'ttf> {
             .map_err(|e| e.to_string())
             .unwrap();
 
-        let exit_message = options[2 + *current_option as usize];
+        let exit_message = options[2 + current_option as usize];
         let (fw2, fh2) = self.font.size_of(exit_message).unwrap();
         let exit_surface  = self.font
             .render(exit_message)
@@ -291,57 +301,54 @@ impl<'ttf> Game<'ttf> {
         self.context.canvas.copy(&exit_texture, None, Some(exit_rect))
             .map_err(|e| e.to_string())
             .unwrap();
-
     }
 
+
+    /// Draws the menu, highlighting the option indexed by `current_option`
+    fn draw_menu(&mut self, current_option: u32) {
+        // FIXME: Should `texture_creator` be a field?
+        let texture_creator = self.context.canvas.texture_creator();
+        self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
+        self.context.canvas.clear();
+        self.context.canvas.set_draw_color(Color::RGB(255, 0, 0));
+        self.context.canvas.draw_rect(self.display.game_area).unwrap();
+        self.render_menu(&texture_creator, current_option);
+        self.context.canvas.present();
+    }
+
+
+    /// Shows and manages the menu screen
     fn game_starting(&mut self) -> GameTransition {
 
-        let mut result : GameTransition = GameTransition::EXIT;
-
-        let texture_creator = self.context.canvas.texture_creator();
-
         let mut current_option : u32 = 0;
+        self.draw_menu(current_option);
 
-        'running: loop {
-            self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
-            self.context.canvas.clear();
+        loop {
+            let event = self.context.event_pump.wait_event();
+            match event {
+                Event::Quit{..} | Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
+                    return GameTransition::EXIT;
+                },
 
-            self.context.canvas.set_draw_color(Color::RGB(255, 0, 0));
-            self.context.canvas.draw_rect(self.display.game_area).unwrap();
+                Event::KeyDown { keycode: Some(Keycode::Up | Keycode::Down), ..} => {
+                    // Update menu:
+                    current_option = 1 - current_option;
+                    self.draw_menu(current_option);
+                },
 
-            for event in self.context.event_pump.poll_iter() {
-                match event {
-                    Event::Quit {..} |
-                    Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
-                        break 'running
-                    },
-                    Event::KeyDown { keycode: Some(Keycode::Up), ..} |
-                    Event::KeyDown { keycode: Some(Keycode::Down), ..} => {
-                        current_option = 1 - current_option;
-                    },
-                    Event::KeyDown { keycode: Some(Keycode::Return), ..} => {
-                        if current_option == 1 {
-                            result = GameTransition::EXIT;
-                            break 'running;
-                        }
-                        else {
-                            result = GameTransition::PLAY;
-                            break 'running;
-                        }
-                    },
-
-                    _ => {}
-                }
+                Event::KeyDown { keycode: Some(Keycode::Return), ..} => {
+                    if current_option == 1 {
+                        return GameTransition::EXIT;
+                    }
+                    else {
+                        return GameTransition::PLAY;
+                    }
+                },
+                _ => {}
             }
-
-            self.render_menu(&texture_creator, &mut current_option);
-            self.context.canvas.present();
-            ::std::thread::sleep(self.speed);
-
         }
-
-        return result;
     }
+
 
     /// This is the loop for the `PLAYING` state. From this state we should be able to transition
     /// to either:
@@ -352,14 +359,13 @@ impl<'ttf> Game<'ttf> {
     /// 
     fn game_loop(&mut self) -> GameTransition {
 
-        let result : GameTransition;
         let mut rng = rand::thread_rng();
 
         let texture_creator = self.context.canvas.texture_creator();
         let mut score_surface : sdl2::surface::Surface;
         let mut texture : sdl2::render::Texture;
 
-        'running: loop {
+        loop {
             self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
             self.context.canvas.clear();
 
@@ -375,31 +381,30 @@ impl<'ttf> Game<'ttf> {
                 match event {
                     Event::Quit {..} |
                     Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
-                        result = GameTransition::LOSE;
-                        break 'running
+                        return GameTransition::LOSE;
                     },
-                    Event::KeyDown { keycode: Some(Keycode::Left), ..} => {
-                        match self.snake.direction {
-                            Direction::RIGHT {..}   => {},
-                            _                       => {self.snake.direction = Direction::LEFT;}
+                    Event::KeyDown { keycode: Some(Keycode::Left | Keycode::H), ..} =>
+                    {
+                        if self.snake.direction != Direction::RIGHT {
+                            self.snake.direction = Direction::LEFT;
                         }
                     },
-                    Event::KeyDown { keycode: Some(Keycode::Right), ..} => {
-                        match self.snake.direction {
-                            Direction::LEFT {..}    => {},
-                            _                       => {self.snake.direction = Direction::RIGHT;}
+                    Event::KeyDown { keycode: Some(Keycode::Right | Keycode::L), ..} =>
+                    {
+                        if self.snake.direction != Direction::LEFT {
+                            self.snake.direction = Direction::RIGHT;
                         }
                     },
-                    Event::KeyDown { keycode: Some(Keycode::Up), ..} => {
-                        match self.snake.direction {
-                            Direction::DOWN {..}    => {},
-                            _                       => {self.snake.direction = Direction::UP;}
+                    Event::KeyDown { keycode: Some(Keycode::Up | Keycode::K), ..} =>
+                    {
+                        if self.snake.direction != Direction::DOWN {
+                            self.snake.direction = Direction::UP;
                         }
                     },
-                    Event::KeyDown { keycode: Some(Keycode::Down), ..} => {
-                        match self.snake.direction {
-                            Direction::UP {..}      => {},
-                            _                       => {self.snake.direction = Direction::DOWN;}
+                    Event::KeyDown { keycode: Some(Keycode::Down | Keycode::J), ..} =>
+                    {
+                        if self.snake.direction != Direction::UP {
+                            self.snake.direction = Direction::DOWN;
                         }
                     },
                     Event::KeyDown { keycode: Some(Keycode::Return), ..} => {
@@ -419,32 +424,28 @@ impl<'ttf> Game<'ttf> {
             match self.snake.direction {
                 Direction::LEFT  {..} => { 
                     if new_head.x == 0 {
-                        result = GameTransition::LOSE;
-                        break 'running;
+                        return GameTransition::LOSE;
                     }
 
                     new_head.x -= 1; 
                 },
                 Direction::RIGHT {..} => { 
                     if new_head.x == self.display.hcells - 1 {
-                        result = GameTransition::LOSE;
-                        break 'running;
+                        return GameTransition::LOSE;
                     }
 
                     new_head.x += 1; 
                 },
                 Direction::UP    {..} => { 
                     if new_head.y == 0 {
-                        result = GameTransition::LOSE;
-                        break 'running;
+                        return GameTransition::LOSE;
                     }
 
                     new_head.y -= 1; 
                 },
                 Direction::DOWN  {..} => { 
                     if new_head.y == self.display.vcells - 1 {
-                        result = GameTransition::LOSE;
-                        break 'running;
+                        return GameTransition::LOSE;
                     }
 
                     new_head.y += 1; 
@@ -470,8 +471,7 @@ impl<'ttf> Game<'ttf> {
 
             for b in &self.snake.body[1..] {
                 if new_head.x == b.x && new_head.y == b.y {
-                    result = GameTransition::LOSE;
-                    break 'running;
+                    return GameTransition::LOSE;
                 }
             }
 
@@ -501,148 +501,119 @@ impl<'ttf> Game<'ttf> {
             self.context.canvas.present();
             ::std::thread::sleep(self.speed);
         }
-
-        return result;
     }
 
     /// This loop represents the `GAMEOVER` window that is shown when `GameState::PLAYING +
     /// GameTransition::LOSE` occurrs. 
     fn game_over_loop(&mut self) -> GameTransition {
-        let result : GameTransition;
+
+        self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
+        self.context.canvas.clear();
+
+        self.context.canvas.set_draw_color(Color::RGB(255, 0, 0));
+        self.context.canvas.draw_rect(self.display.game_area).unwrap();
 
         let texture_creator = self.context.canvas.texture_creator();
+        let new_game_message = "You lost! Press any key to continue...";
+        let (fw1, fh1) = self.font.size_of(new_game_message).unwrap();
 
-        'running: loop {
-            self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
-            self.context.canvas.clear();
+        let new_game_surface  = self.font
+            .render(new_game_message)
+            .solid(Color::RGB(0, 0, 0))
+            .unwrap();
+        let new_game_texture = texture_creator
+            .create_texture_from_surface(&new_game_surface)
+            .unwrap();
+        let new_game_rect = Rect::new(WIDTH as i32/2 - fw1 as i32/2, HEIGHT as i32/2 - fh1 as i32/2, fw1, fh1);
+        self.context.canvas.copy(&new_game_texture, None, Some(new_game_rect))
+            .map_err(|e| e.to_string())
+            .unwrap();
+        self.context.canvas.present();
 
-            self.context.canvas.set_draw_color(Color::RGB(255, 0, 0));
-            self.context.canvas.draw_rect(self.display.game_area).unwrap();
-
-            for event in self.context.event_pump.poll_iter() {
-                match event {
-                    Event::Quit {..} |
-                    Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
-                        result = GameTransition::EXIT;
-                        break 'running
-                    },
-                    Event::KeyDown {..}  => {
-                        result = GameTransition::PLAY;
-                        break 'running;
-                    },
-
-                    _ => {}
-                }
+        loop {
+            let event = self.context.event_pump.wait_event();
+            match event {
+                Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
+                    return GameTransition::EXIT;
+                },
+                Event::KeyDown {..}  => {
+                    return GameTransition::PLAY;
+                },
+                _ => {}
             }
-
-
-            let new_game_message = "You lost! Press any key to continue...";
-            let (fw1, fh1) = self.font.size_of(new_game_message).unwrap();
-
-            let new_game_surface  = self.font
-                .render(new_game_message)
-                .solid(Color::RGB(0, 0, 0))
-                .unwrap();
-            let new_game_texture = texture_creator
-                .create_texture_from_surface(&new_game_surface)
-                .unwrap();
-            let new_game_rect = Rect::new(WIDTH as i32/2 - fw1 as i32/2, HEIGHT as i32/2 - fh1 as i32/2, fw1, fh1);
-            self.context.canvas.copy(&new_game_texture, None, Some(new_game_rect))
-                .map_err(|e| e.to_string())
-                .unwrap();
-
-            self.context.canvas.present();
-            ::std::thread::sleep(self.speed);
-
         }
-
-        return result;
     }
 
     /// The `Game` is controlled by a `FSM`. This probably hasn't been fully thought through. Take
     /// it as a temporary skelleton for now. E.g. we currently don't have a `STARTING` window.
     /// TODO: Confirm that the FSM is complete.
     fn start(&mut self) {
-        'game: loop {
+        loop {
+            let transition;// = GameTransition::EXIT;
+            let mut handled = true; // Whether the transition was already processed by an inner state handle.
+            // Unless explicitly set to false in a state handle, we assume the transition was already processed.
+
             match self.context.current_state {
-                GameState::STARTING {..} => {
-                    let transition = self.game_starting();
-                    match transition {
-                        GameTransition::PLAY {..} => {
+
+                GameState::STARTING => {
+                    transition = self.game_starting();
+                    match transition
+                    {
+                        GameTransition::PLAY => {
                             self.context.current_state = GameState::PLAYING;
                         },
-
-                        GameTransition::EXIT {..} => {
-                            break 'game
-                        },
-
-                        _ => {
-                            panic!("Invalid transition {:?} in state {:?}", transition, self.context.current_state);
-                        }
+                        _ => { handled = false; }
                     }
                 },
 
-                GameState::PLAYING {..} => {
-                    let transition = self.game_loop();
-                    match transition {
-                        GameTransition::PAUSE {..} => {
+                GameState::PLAYING => {
+                    transition = self.game_loop();
+                    match transition
+                    {
+                        GameTransition::PAUSE => {
                             self.context.current_state = GameState::PAUSED;
                         },
-
-                        GameTransition::LOSE {..} => {
+                        GameTransition::LOSE => {
                             self.context.current_state = GameState::GAMEOVER;
                         },
-
-                        _ => {
-                            panic!("Invalid transition {:?} in state {:?}", transition, self.context.current_state);
-                        }
+                        _ => { handled = false; }
                     }
-
                 },
 
-                GameState::PAUSED {..} => {
-                    let transition = GameTransition::PLAY;
-                    match transition {
-                        GameTransition::PLAY {..} => {
+                GameState::PAUSED => {
+                    transition = GameTransition::PLAY;
+                    match transition
+                    {
+                        GameTransition::PLAY => {
                             self.context.current_state = GameState::PLAYING;
                         },
-
-                        GameTransition::EXIT {..} => {
-                            break 'game
-                        },
-
-                        _ => {
-                            panic!("Invalid transition {:?} in state {:?}", transition, self.context.current_state);
-                        }
+                        _ => { handled = false; }
                     }
                 },
 
-                GameState::GAMEOVER {..} => {
-                    let transition = self.game_over_loop();
-                    match transition {
-                        GameTransition::PLAY {..} => {
+                GameState::GAMEOVER => {
+                    transition = self.game_over_loop();
+                    match transition
+                    {
+                        GameTransition::PLAY => {
                             self.context.current_state = GameState::STARTING;
                         },
-
-                        GameTransition::EXIT {..} => {
-                            break 'game
-                        },
-
-                        _ => {
-                            panic!("Invalid transition {:?} in state {:?}", transition, self.context.current_state);
-                        }
+                        _ => { handled = false; }
                     }
-                },
-            } // match current_state
-        } // end loop
+                }
+
+            }
+
+            if handled {
+                continue;
+            }
+            else if transition == GameTransition::EXIT {
+                // Global transition: finish game.
+                return;
+            }
+            else {
+                panic!("Invalid transition {:?} in state {:?}", transition, self.context.current_state);
+            }
+        }
     }
-}
-
-
-
-fn main() {
-
-    let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
-    let mut game = Game::new(&ttf_context);
-    game.start();
 }
