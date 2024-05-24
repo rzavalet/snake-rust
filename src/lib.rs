@@ -23,11 +23,10 @@ const CELL_SPACE  : u32 = 20;
 const NORMAL_SPEED: Duration = Duration::from_millis(300);
 const FAST_SPEED:   Duration = Duration::from_millis(50);
 
-const FONT_FILE : &str = "./res/Roboto-Regular.ttf";
-//const FONT_FILE = "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf";
 
-
-/// Entry point
+/// Entry point. The path for the font file to use for rendering text in the game
+/// must be passed as a string in `font_path`.
+///
 pub fn run(font_path: &str) -> Result<(), Box<dyn Error>> {
     let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
     let mut game = Game::new(font_path, &ttf_context);
