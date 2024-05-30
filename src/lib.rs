@@ -99,7 +99,7 @@ struct Snake {
 
 /// We use the GameContext to stash anything related to the underlying SDL structures.
 struct GameContext<'time> {
-    timer           : sdl2::timer::Timer<'time, 'time>,
+    _timer          : sdl2::timer::Timer<'time, 'time>,
     canvas          : sdl2::render::Canvas<Window>,
     event_pump      : sdl2::EventPump,
     current_state   : GameState,
@@ -136,18 +136,20 @@ impl<'time> GameContext<'time> {
         let event_sender = event_manager.event_sender();
 
         struct TimerEvent{} // No payload to carry.
-        event_sender.push_custom_event( TimerEvent{} ).unwrap();
 
-        let timer = timer_subsystem.add_timer(
+        // Set a timer callback that pushes `TimerEvent` events.
+        let _timer = timer_subsystem.add_timer(
             NORMAL_SPEED.as_millis().try_into().unwrap(),
             Box::new(move || -> u32 {
-                event_sender.push_custom_event( TimerEvent{} ).unwrap(); // Queue next timer event
+                // Queue next timer event. Note that there is no need to pause the timer,
+                // since if an event of this same type is in the queue, the push operation is a no-op.
+                event_sender.push_custom_event( TimerEvent{} ).unwrap();
                 NORMAL_SPEED.as_millis().try_into().unwrap() // Return new interval.
             }
         ));
 
         GameContext {
-            timer,
+            _timer,
             current_state : GameState::STARTING,
             canvas        : canvas,
             event_pump    : event_pump,
@@ -240,8 +242,6 @@ fn create_grid() -> GameArea {
 /// The actual state of the game.
 struct Game<'ttf> {
     context     : GameContext<'ttf>,
-    // TODO: We need to figure out how to set the `lifetime`s of multiple structures. This one is
-    // only an example. There are many more.
     display     : GameArea,
     speed       : Duration,
     score       : u32,
@@ -382,17 +382,41 @@ impl<'ttf> Game<'ttf> {
     }
 
 
+    /// Handles the paused loop. From here we can return to `PLAYING` or to `LOSE`
+    ///
+    fn paused_loop(&mut self) -> GameTransition {
+        loop {
+            let event = self.context.event_pump.wait_event();
+
+            match event
+            {
+                Event::Quit {..} |
+                Event::KeyDown { keycode: Some(Keycode::Escape | Keycode::Q), ..} => {
+                    return GameTransition::LOSE;
+                },
+
+                Event::KeyDown { keycode: Some(Keycode::Space), ..} => {
+                    return GameTransition::PLAY;
+                },
+
+                _ => {}
+            }
+        }
+    }
+
+
     /// This is the loop for the `PLAYING` state. From this state we should be able to transition
     /// to either:
-    ///     - PAUSED: If the user presses _some_ key.
+    ///     - PAUSED: If the user presses the space bar key.
     ///     - GAMEOVER: If the `Snake` collides with itself or with the walls.
     ///
     /// Otherwise, the game continues _ad infinitum`.
     /// 
     fn game_loop(&mut self) -> GameTransition {
 
+        let mut draw_grid = false;
+
         loop {
-            let mut draw_grid = false;
             let event = self.context.event_pump.wait_event();
 
             match event
@@ -408,6 +432,10 @@ impl<'ttf> Game<'ttf> {
                 Event::Quit {..} |
                 Event::KeyDown { keycode: Some(Keycode::Escape | Keycode::Q), ..} => {
                     return GameTransition::LOSE;
+                },
+
+                Event::KeyDown { keycode: Some(Keycode::Space), ..} => {
+                    return GameTransition::PAUSE;
                 },
 
                 Event::KeyDown { keycode: Some(Keycode::Left | Keycode::H), ..} =>
@@ -464,8 +492,8 @@ impl<'ttf> Game<'ttf> {
         let mut rng = rand::thread_rng();
 
         let texture_creator = self.context.canvas.texture_creator();
-        let mut score_surface : sdl2::surface::Surface;
-        let mut texture : sdl2::render::Texture;
+        let score_surface : sdl2::surface::Surface;
+        let texture : sdl2::render::Texture;
 
         self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
         self.context.canvas.clear();
@@ -635,11 +663,14 @@ impl<'ttf> Game<'ttf> {
                 },
 
                 GameState::PAUSED => {
-                    transition = GameTransition::PLAY;
+                    transition = self.paused_loop();
                     match transition
                     {
                         GameTransition::PLAY => {
                             self.context.current_state = GameState::PLAYING;
+                        },
+                        GameTransition::LOSE => {
+                            self.context.current_state = GameState::GAMEOVER;
                         },
                         _ => { handled = false; }
                     }
