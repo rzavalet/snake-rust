@@ -9,9 +9,9 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::rect::Rect;
 use sdl2::render;
-use sdl2::render::Canvas;
+//use sdl2::render::Canvas;
 use sdl2::video::Window;
-use sdl2::EventPump;
+//use sdl2::EventPump;
 use sdl2::ttf;
 
 
@@ -20,7 +20,7 @@ const HEIGHT      : u32 = 600;
 const SPACING     : u32 = 20;
 const CELL_SPACE  : u32 = 20;
 
-const NORMAL_SPEED: Duration = Duration::from_millis(300);
+const NORMAL_SPEED: Duration = Duration::from_millis(200);
 const FAST_SPEED:   Duration = Duration::from_millis(50);
 
 
@@ -28,8 +28,10 @@ const FAST_SPEED:   Duration = Duration::from_millis(50);
 /// must be passed as a string in `font_path`.
 ///
 pub fn run(font_path: &str) -> Result<(), Box<dyn Error>> {
-    let ttf_context = ttf::init().map_err(|e| e.to_string()).unwrap();
-    let mut game = Game::new(font_path, &ttf_context);
+    let sdl_context = sdl2::init()?;
+    let timer_subsystem = sdl_context.timer()?;
+    let ttf_context = ttf::init().map_err(|e| e.to_string())?;
+    let mut game = Game::new(&sdl_context, &timer_subsystem, &ttf_context, font_path);
     game.start();
     Ok(())
 }
@@ -96,18 +98,21 @@ struct Snake {
 
 
 /// We use the GameContext to stash anything related to the underlying SDL structures.
-struct GameContext {
+struct GameContext<'time> {
+    _timer          : sdl2::timer::Timer<'time, 'time>,
+    canvas          : sdl2::render::Canvas<Window>,
+    event_pump      : sdl2::EventPump,
     current_state   : GameState,
-    canvas          : Canvas<Window>,
-    event_pump      : EventPump,
 }
 
 
-impl GameContext {
+impl<'time> GameContext<'time> {
 
     /// Constructor
-    fn new() -> GameContext {
-        let sdl_context = sdl2::init().unwrap();
+    fn new(
+        sdl_context: &'time sdl2::Sdl, timer_subsystem: &'time sdl2::TimerSubsystem,
+    ) -> GameContext<'time>
+    {
         let video_subsystem = sdl_context.video().unwrap();
 
         let window = video_subsystem.window("Simple Snake", WIDTH, HEIGHT)
@@ -121,9 +126,30 @@ impl GameContext {
         canvas.set_draw_color(Color::RGB(0, 255, 255));
         canvas.clear();
 
-        let event_pump = sdl_context.event_pump().unwrap();
+        let event_pump    = sdl_context.event_pump().unwrap();
+        let event_manager = sdl_context.event().unwrap();
+
+        event_manager.register_custom_event::<TimerEvent>().unwrap();
+
+        // `EventSender` objects can be moved to other threads and allow pushing
+        // events to the queue from there:
+        let event_sender = event_manager.event_sender();
+
+        struct TimerEvent{} // No payload to carry.
+
+        // Set a timer callback that pushes `TimerEvent` events.
+        let _timer = timer_subsystem.add_timer(
+            NORMAL_SPEED.as_millis().try_into().unwrap(),
+            Box::new(move || -> u32 {
+                // Queue next timer event. Note that there is no need to pause the timer,
+                // since if an event of this same type is in the queue, the push operation is a no-op.
+                event_sender.push_custom_event( TimerEvent{} ).unwrap();
+                NORMAL_SPEED.as_millis().try_into().unwrap() // Return new interval.
+            }
+        ));
 
         GameContext {
+            _timer,
             current_state : GameState::STARTING,
             canvas        : canvas,
             event_pump    : event_pump,
@@ -215,9 +241,7 @@ fn create_grid() -> GameArea {
 
 /// The actual state of the game.
 struct Game<'ttf> {
-    context     : GameContext,
-    // TODO: We need to figure out how to set the `lifetime`s of multiple structures. This one is
-    // only an example. There are many more.
+    context     : GameContext<'ttf>,
     display     : GameArea,
     speed       : Duration,
     score       : u32,
@@ -235,7 +259,12 @@ impl<'ttf> Game<'ttf> {
     /// Create a new `Game`. Once a game is created, a game can be `start`ed(). As part of creating
     /// the `Game`, its `GameContext` is also initialized. Such initialization consists of setting
     /// up everything related to SDL2.
-    fn new(font_path: &str, ttf_context: &'ttf ttf::Sdl2TtfContext) -> Game<'ttf> {
+
+    fn new(
+        sdl_context: &'ttf sdl2::Sdl, timer_subsystem: &'ttf sdl2::TimerSubsystem,
+        ttf_context: &'ttf ttf::Sdl2TtfContext, font_path: &str
+    ) -> Game<'ttf>
+    {
         let mut rng = rand::thread_rng();
 
         let mut font = ttf_context.load_font(font_path, 24)
@@ -245,7 +274,7 @@ impl<'ttf> Game<'ttf> {
 
         let display = create_grid();
         let snake = create_snake(&display);
-        let ctxt = GameContext::new();
+        let ctxt = GameContext::new(sdl_context, timer_subsystem);
 
         let score_rect = Rect::new(SPACING as i32, 0, 100, SPACING);
 
@@ -353,165 +382,207 @@ impl<'ttf> Game<'ttf> {
     }
 
 
+    /// Handles the paused loop. From here we can return to `PLAYING` or to `LOSE`
+    ///
+    fn paused_loop(&mut self) -> GameTransition {
+        loop {
+            let event = self.context.event_pump.wait_event();
+
+            match event
+            {
+                Event::Quit {..} |
+                Event::KeyDown { keycode: Some(Keycode::Escape | Keycode::Q), ..} => {
+                    return GameTransition::LOSE;
+                },
+
+                Event::KeyDown { keycode: Some(Keycode::Space), ..} => {
+                    return GameTransition::PLAY;
+                },
+
+                _ => {}
+            }
+        }
+    }
+
+
     /// This is the loop for the `PLAYING` state. From this state we should be able to transition
     /// to either:
-    ///     - PAUSED: If the user presses _some_ key.
+    ///     - PAUSED: If the user presses the space bar key.
     ///     - GAMEOVER: If the `Snake` collides with itself or with the walls.
     ///
     /// Otherwise, the game continues _ad infinitum`.
     /// 
     fn game_loop(&mut self) -> GameTransition {
 
-        let mut rng = rand::thread_rng();
-
-        let texture_creator = self.context.canvas.texture_creator();
-        let mut score_surface : sdl2::surface::Surface;
-        let mut texture : sdl2::render::Texture;
         let mut draw_grid = false;
 
         loop {
-            self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
-            self.context.canvas.clear();
+            let event = self.context.event_pump.wait_event();
 
-            self.context.canvas.set_draw_color(Color::RGB(255, 0, 0));
-            self.context.canvas.draw_rect(self.display.game_area).unwrap();
-
-            if draw_grid {
-                self.context.canvas.set_draw_color(Color::RGB(100, 100, 100));
-                for r in &self.display.grid {
-                    self.context.canvas.draw_rect(*r).unwrap();
-                }
-            }
-
-            for event in self.context.event_pump.poll_iter() {
-                match event {
-                    Event::Quit {..} |
-                    Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
-                        return GameTransition::LOSE;
-                    },
-                    Event::KeyDown { keycode: Some(Keycode::Left | Keycode::H), ..} =>
-                    {
-                        if self.snake.direction != Direction::RIGHT {
-                            self.snake.direction = Direction::LEFT;
-                        }
-                    },
-                    Event::KeyDown { keycode: Some(Keycode::Right | Keycode::L), ..} =>
-                    {
-                        if self.snake.direction != Direction::LEFT {
-                            self.snake.direction = Direction::RIGHT;
-                        }
-                    },
-                    Event::KeyDown { keycode: Some(Keycode::Up | Keycode::K), ..} =>
-                    {
-                        if self.snake.direction != Direction::DOWN {
-                            self.snake.direction = Direction::UP;
-                        }
-                    },
-                    Event::KeyDown { keycode: Some(Keycode::Down | Keycode::J), ..} =>
-                    {
-                        if self.snake.direction != Direction::UP {
-                            self.snake.direction = Direction::DOWN;
-                        }
-                    },
-                    Event::KeyDown { keycode: Some(Keycode::Return), ..} => {
-                        self.speed = FAST_SPEED;
-                    },
-                    Event::KeyUp { keycode: Some(Keycode::Return), ..} => {
-                        self.speed = NORMAL_SPEED;
-                    },
-
-                    Event::KeyDown { keycode: Some(Keycode::G), ..} => {
-                        // Toggle grid on and off
-                        draw_grid = !draw_grid;
-                    },
-
-                    _ => {}
-                }
-            }
-
-            let head = self.snake.body[0];
-            let mut new_head = head;
-
-            match self.snake.direction {
-                Direction::LEFT  {..} => { 
-                    if new_head.x == 0 {
+            match event
+            {
+                Event::User {..} => {
+                    // The only user event we have is the timer, this means
+                    // here we need to generate the current frame.
+                    if ! self.draw_frame(draw_grid) {
                         return GameTransition::LOSE;
                     }
-
-                    new_head.x -= 1; 
                 },
-                Direction::RIGHT {..} => { 
-                    if new_head.x == self.display.hcells - 1 {
-                        return GameTransition::LOSE;
-                    }
 
-                    new_head.x += 1; 
-                },
-                Direction::UP    {..} => { 
-                    if new_head.y == 0 {
-                        return GameTransition::LOSE;
-                    }
-
-                    new_head.y -= 1; 
-                },
-                Direction::DOWN  {..} => { 
-                    if new_head.y == self.display.vcells - 1 {
-                        return GameTransition::LOSE;
-                    }
-
-                    new_head.y += 1; 
-                },
-            }
-
-            if new_head.x == self.food.x && new_head.y == self.food.y {
-                self.food.x = rng.gen_range(0..self.display.hcells);
-                self.food.y = rng.gen_range(0..self.display.vcells);
-                self.score += 1;
-                //println!("New score: {0}", self.score);
-            }
-            else {
-                self.snake.body.pop().unwrap();
-            }
-
-            self.snake.body.insert(0,new_head);
-
-            //for b in &self.snake.body[1..] {
-            //    println!("Body {0} {1}", b.x, b.y);
-            //}
-            //println!("New Head {0} {1}", new_head.x, new_head.y);
-
-            for b in &self.snake.body[1..] {
-                if new_head.x == b.x && new_head.y == b.y {
+                Event::Quit {..} |
+                Event::KeyDown { keycode: Some(Keycode::Escape | Keycode::Q), ..} => {
                     return GameTransition::LOSE;
-                }
+                },
+
+                Event::KeyDown { keycode: Some(Keycode::Space), ..} => {
+                    return GameTransition::PAUSE;
+                },
+
+                Event::KeyDown { keycode: Some(Keycode::Left | Keycode::H), ..} =>
+                {
+                    if self.snake.direction != Direction::RIGHT {
+                        self.snake.direction = Direction::LEFT;
+                    }
+                },
+
+                Event::KeyDown { keycode: Some(Keycode::Right | Keycode::L), ..} =>
+                {
+                    if self.snake.direction != Direction::LEFT {
+                        self.snake.direction = Direction::RIGHT;
+                    }
+                },
+
+                Event::KeyDown { keycode: Some(Keycode::Up | Keycode::K), ..} =>
+                {
+                    if self.snake.direction != Direction::DOWN {
+                        self.snake.direction = Direction::UP;
+                    }
+                },
+                
+                Event::KeyDown { keycode: Some(Keycode::Down | Keycode::J), ..} =>
+                {
+                    if self.snake.direction != Direction::UP {
+                        self.snake.direction = Direction::DOWN;
+                    }
+                },
+
+                Event::KeyDown { keycode: Some(Keycode::Return), ..} => {
+                    self.speed = FAST_SPEED;
+                },
+
+                Event::KeyUp { keycode: Some(Keycode::Return), ..} => {
+                    self.speed = NORMAL_SPEED;
+                },
+
+                Event::KeyDown { keycode: Some(Keycode::G), ..} => {
+                    // Toggle grid on and off
+                    draw_grid = !draw_grid;
+                },
+
+                _ => {}
             }
+        } // loop
+    }
 
 
-            self.context.canvas.set_draw_color(Color::RGB(0,255,0));
-            self.context.canvas.fill_rect(create_rect(&self.display, &self.snake.body[0])).unwrap();
-            self.context.canvas.set_draw_color(Color::RGB(0,0,255));
-            for b in &self.snake.body[1..] {
-                self.context.canvas.fill_rect(create_rect(&self.display, b)).unwrap();
+    /// Generates and draws the current frame.
+    /// Return boolean indicating if the game can continue (or the user lost).
+    ///
+    fn draw_frame(&mut self, draw_grid:bool) -> bool{
+        let mut rng = rand::thread_rng();
+
+        let texture_creator = self.context.canvas.texture_creator();
+        let score_surface : sdl2::surface::Surface;
+        let texture : sdl2::render::Texture;
+
+        self.context.canvas.set_draw_color(Color::RGB(255, 255, 255));
+        self.context.canvas.clear();
+
+        self.context.canvas.set_draw_color(Color::RGB(255, 0, 0));
+        self.context.canvas.draw_rect(self.display.game_area).unwrap();
+
+        if draw_grid {
+            self.context.canvas.set_draw_color(Color::RGB(100, 100, 100));
+            for r in &self.display.grid {
+                self.context.canvas.draw_rect(*r).unwrap();
             }
-
-            self.context.canvas.set_draw_color(Color::RGB(0,0,0));
-            self.context.canvas.fill_rect(create_rect(&self.display, &self.food)).unwrap();
-
-            let score_message = &format!("Score: {}", self.score);
-            score_surface  = self.font
-                .render(score_message)
-                .solid(Color::RGB(0, 0, 0))
-                .unwrap();
-            texture = texture_creator
-                .create_texture_from_surface(&score_surface)
-                .unwrap();
-            self.context.canvas.copy(&texture, None, Some(self.score_rect))
-                .map_err(|e| e.to_string())
-                .unwrap();
-
-            self.context.canvas.present();
-            ::std::thread::sleep(self.speed);
         }
+
+        let head = self.snake.body[0];
+        let mut new_head = head;
+
+        match self.snake.direction {
+            Direction::LEFT  {..} => { 
+                if new_head.x == 0 {
+                    return false;
+                }
+
+                new_head.x -= 1; 
+            },
+            Direction::RIGHT {..} => { 
+                if new_head.x == self.display.hcells - 1 {
+                    return false;
+                }
+
+                new_head.x += 1; 
+            },
+            Direction::UP    {..} => { 
+                if new_head.y == 0 {
+                    return false;
+                }
+
+                new_head.y -= 1; 
+            },
+            Direction::DOWN  {..} => { 
+                if new_head.y == self.display.vcells - 1 {
+                    return false;
+                }
+
+                new_head.y += 1; 
+            },
+        }
+        if new_head.x == self.food.x && new_head.y == self.food.y {
+            self.food.x = rng.gen_range(0..self.display.hcells);
+            self.food.y = rng.gen_range(0..self.display.vcells);
+            self.score += 1;
+            //println!("New score: {0}", self.score);
+        }
+        else {
+            self.snake.body.pop().unwrap();
+        }
+
+        self.snake.body.insert(0,new_head);
+
+        for b in &self.snake.body[1..] {
+            if new_head.x == b.x && new_head.y == b.y {
+                return false;
+            }
+        }
+
+        self.context.canvas.set_draw_color(Color::RGB(0,255,0));
+        self.context.canvas.fill_rect(create_rect(&self.display, &self.snake.body[0])).unwrap();
+        self.context.canvas.set_draw_color(Color::RGB(0,0,255));
+        for b in &self.snake.body[1..] {
+            self.context.canvas.fill_rect(create_rect(&self.display, b)).unwrap();
+        }
+
+        self.context.canvas.set_draw_color(Color::RGB(0,0,0));
+        self.context.canvas.fill_rect(create_rect(&self.display, &self.food)).unwrap();
+
+        let score_message = &format!("Score: {}", self.score);
+        score_surface  = self.font
+            .render(score_message)
+            .solid(Color::RGB(0, 0, 0))
+            .unwrap();
+        texture = texture_creator
+            .create_texture_from_surface(&score_surface)
+            .unwrap();
+        self.context.canvas.copy(&texture, None, Some(self.score_rect))
+            .map_err(|e| e.to_string())
+            .unwrap();
+
+        self.context.canvas.present();
+        return true;
     }
 
     /// This loop represents the `GAMEOVER` window that is shown when `GameState::PLAYING +
@@ -592,11 +663,14 @@ impl<'ttf> Game<'ttf> {
                 },
 
                 GameState::PAUSED => {
-                    transition = GameTransition::PLAY;
+                    transition = self.paused_loop();
                     match transition
                     {
                         GameTransition::PLAY => {
                             self.context.current_state = GameState::PLAYING;
+                        },
+                        GameTransition::LOSE => {
+                            self.context.current_state = GameState::GAMEOVER;
                         },
                         _ => { handled = false; }
                     }
